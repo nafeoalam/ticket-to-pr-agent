@@ -1,0 +1,13 @@
+# Image used to run tests on code the agent wrote.
+# Build once:  docker build -f Dockerfile.sandbox -t ticket-agent-sandbox .
+#
+# The image only holds Python and the app's dependencies. The repo itself is
+# mounted read-only at run time, with no network. See agent/sandbox.py.
+FROM python:3.12-slim
+
+COPY sample_app/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN useradd --create-home runner
+USER runner
+WORKDIR /work

@@ -1,0 +1,8 @@
+.env
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+# Run records can hold ticket text and code. Commit only the ones you choose to show.
+runs/*
+!runs/.gitkeep
