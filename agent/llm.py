@@ -55,7 +55,11 @@ class ChatLLM:
             )
         from langchain.chat_models import init_chat_model
 
-        self._model = init_chat_model(model, temperature=0)
+        # No temperature: current Claude models reject sampling parameters with a 400.
+        # An explicit output cap keeps non-streaming calls under the SDK's request time limit.
+        self._model = init_chat_model(
+            model, max_tokens=int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", 16000))
+        )
         self._callbacks = _langfuse_callbacks()
         self.usage = Usage()
 
