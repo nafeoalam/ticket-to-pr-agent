@@ -222,12 +222,16 @@ tests/            tests for the agent itself, using a scripted model
 
 ## Replay demo
 
-`space/` holds a small Gradio page that replays recorded runs: ticket, spec, code change,
+Live demo: [huggingface.co/spaces/nafeo/ticket-to-pr-agent](https://huggingface.co/spaces/nafeo/ticket-to-pr-agent)
+
+`space/` holds a static page that replays recorded runs: ticket, spec, code change,
 test output and each step with time and tokens. It does not run the agent, because a
-public page that runs a coding agent for anyone is a cost and security problem.
+public page that runs a coding agent for anyone is a cost and security problem. Replays
+need no server, so the page is plain HTML and runs on a free static Space.
 
 To publish: run the evals, copy the runs you want to show from `runs/` into `space/runs/`,
-and push the `space/` folder to a Gradio Space.
+run `python space/build.py` to bundle them into `space/runs.json`, and upload
+`index.html`, `runs.json` and `README.md` from `space/` to a static Space.
 
 ## Tracing
 

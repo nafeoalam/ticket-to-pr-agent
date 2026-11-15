@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket to PR Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #66665f; --border: #dddcd6;
+    --accent: #3b5bdb; --pass: #2b8a3e; --fail: #c92a2a; --code-bg: #f1f0ec;
+    --add: #e6f4ea; --add-text: #1e6b30; --del: #fdecec; --del-text: #a61e1e; --hunk: #6741d9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1e1e1c; --text: #ecebe6; --muted: #a3a29b; --border: #33322e;
+      --accent: #91a7ff; --pass: #69db7c; --fail: #ff8787; --code-bg: #262624;
+      --add: #1d3324; --add-text: #8ce99a; --del: #3b1f1f; --del-text: #ffa8a8; --hunk: #b197fc;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 6px; }
+  .intro { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  a { color: var(--accent); }
+  label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 4px; }
+  select {
+    width: 100%; padding: 10px 12px; font: inherit; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .summary { margin: 18px 0 8px; }
+  .summary h2 { font-size: 1.2rem; margin: 0 0 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: .82rem; padding: 3px 9px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--border); white-space: nowrap;
+  }
+  .chip.pass { color: var(--pass); border-color: var(--pass); font-weight: 600; }
+  .chip.fail { color: var(--fail); border-color: var(--fail); font-weight: 600; }
+  .note { margin: 10px 0 0; font-size: .9rem; color: var(--muted); }
+  .tabs { display: flex; gap: 2px; margin-top: 18px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tabs button {
+    font: inherit; font-size: .92rem; padding: 8px 14px; background: none; color: var(--muted);
+    border: 0; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
+  }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-top: 0;
+    border-radius: 0 0 8px 8px; padding: 16px 18px; min-height: 160px; overflow-x: auto;
+  }
+  .panel[hidden] { display: none; }
+  .md h1, .md h2, .md h3 { font-size: 1.05rem; margin: 1.1em 0 .4em; }
+  .md :first-child { margin-top: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86em; }
+  .md code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre {
+    margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem;
+    line-height: 1.5; white-space: pre; background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto;
+  }
+  pre .add { background: var(--add); color: var(--add-text); display: block; }
+  pre .del { background: var(--del); color: var(--del-text); display: block; }
+  pre .hunk { color: var(--hunk); display: block; }
+  pre .file { font-weight: 700; display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  footer { margin-top: 28px; font-size: .85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ticket to pull request agent</h1>
+  <p class="intro">
+    Replays of real recorded runs. For each ticket the agent writes a short spec, waits for approval,
+    writes the code and tests, and runs the tests in a sandbox. This page only replays runs; it does not
+    run the agent. Code, the full eval set and all results are on
+    <a href="https://github.com/nafeoalam/ticket-to-pr-agent">GitHub</a>.
+  </p>
+
+  <label for="picker">Run</label>
+  <select id="picker"></select>
+
+  <section class="summary" id="summary"></section>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="ticket" aria-selected="true">Ticket</button>
+    <button role="tab" data-tab="spec" aria-selected="false">Spec</button>
+    <button role="tab" data-tab="diff" aria-selected="false">Code change</button>
+    <button role="tab" data-tab="tests" aria-selected="false">Test output</button>
+    <button role="tab" data-tab="steps" aria-selected="false">Steps</button>
+  </div>
+  <div class="panel md" id="tab-ticket" role="tabpanel"></div>
+  <div class="panel md" id="tab-spec" role="tabpanel" hidden></div>
+  <div class="panel" id="tab-diff" role="tabpanel" hidden></div>
+  <div class="panel" id="tab-tests" role="tabpanel" hidden></div>
+  <div class="panel" id="tab-steps" role="tabpanel" hidden></div>
+
+  <footer>Each run record is the agent's own log: model calls, tokens and time per step.</footer>
+</main>
+
+<script>
+  const $ = (sel) => document.querySelector(sel);
+
+  function el(tag, attrs = {}, text) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  // Ticket and spec text come from outside people and from a model, so the
+  // rendered Markdown is always sanitised. Without the libraries, show plain text.
+  function renderMarkdown(target, text) {
+    target.replaceChildren();
+    if (window.marked && window.DOMPurify) {
+      target.innerHTML = DOMPurify.sanitize(marked.parse(text || ""));
+    } else {
+      target.append(el("pre", {}, text || ""));
+    }
+  }
+
+  function renderDiff(target, diff) {
+    const pre = el("pre");
+    if (!diff) {
+      pre.textContent = "(no changes)";
+    } else {
+      for (const line of diff.split("\n")) {
+        let cls = "";
+        if (line.startsWith("+++") || line.startsWith("---")) cls = "file";
+        else if (line.startsWith("@@")) cls = "hunk";
+        else if (line.startsWith("+")) cls = "add";
+        else if (line.startsWith("-")) cls = "del";
+        const span = el("span", cls ? { class: cls } : {}, line + "\n");
+        pre.append(span);
+      }
+    }
+    target.replaceChildren(pre);
+  }
+
+  function renderSteps(target, steps) {
+    const table = el("table");
+    const head = el("tr");
+    [["#", "num"], ["Step", ""], ["What happened", ""], ["Seconds", "num"], ["Tokens", "num"]]
+      .forEach(([name, cls]) => head.append(el("th", cls ? { class: cls } : {}, name)));
+    table.append(head);
+    (steps || []).forEach((s, i) => {
+      const row = el("tr");
+      row.append(
+        el("td", { class: "num" }, String(i + 1)),
+        el("td", {}, s.step),
+        el("td", {}, s.summary.startsWith("local://") ? "Pull request written" : s.summary),
+        el("td", { class: "num" }, String(s.seconds)),
+        el("td", { class: "num" }, String(s.tokens_in + s.tokens_out)),
+      );
+      table.append(row);
+    });
+    target.replaceChildren(table);
+  }
+
+  function humanReviewed(run) {
+    return (run.steps || []).some((s) => s.step === "approval" && s.summary === "Approved by reviewer");
+  }
+
+  const STATUS = { pr_opened: "pull request opened", gave_up: "gave up", rejected: "rejected", error: "error" };
+  const statusText = (status) => STATUS[status] || status;
+
+  function label(run) {
+    const result = run.eval ? (run.eval.passed ? "pass" : "fail") : statusText(run.status);
+    const level = run.eval ? run.eval.level : "reviewed by a human";
+    return `${run.ticket_title}  (${level}, ${result})`;
+  }
+
+  function renderSummary(run) {
+    const box = $("#summary");
+    box.replaceChildren(el("h2", {}, run.ticket_title));
+    const chips = el("div", { class: "chips" });
+    const chip = (text, cls) => chips.append(el("span", { class: "chip" + (cls ? " " + cls : "") }, text));
+    if (run.eval) {
+      chip(run.eval.hidden_passed ? "Hidden test passed" : "Hidden test failed",
+           run.eval.hidden_passed ? "pass" : "fail");
+      chip("Level: " + run.eval.level);
+    }
+    if (humanReviewed(run)) chip("Spec approved by a human");
+    chip("Status: " + statusText(run.status));
+    chip("Attempts: " + run.attempts);
+    chip("Tokens: " + (run.tokens_in + run.tokens_out).toLocaleString());
+    if (run.cost_usd) chip("Cost: $" + run.cost_usd.toFixed(3));
+    chip("Model: " + (run.model || "").replace(/^anthropic:/, ""));
+    box.append(chips);
+    const why = run.failure_reason || run.error;
+    if (why) box.append(el("p", { class: "note" }, "Why it stopped: " + why));
+    if (run.suspicious && run.suspicious.length) {
+      box.append(el("p", { class: "note" }, "Flagged as suspicious in the ticket: " + run.suspicious.join("; ")));
+    }
+  }
+
+  function show(run) {
+    renderSummary(run);
+    renderMarkdown($("#tab-ticket"), `**${run.ticket_title}**\n\n${run.ticket_body}`);
+    renderMarkdown($("#tab-spec"), run.spec || "(no spec)");
+    renderDiff($("#tab-diff"), run.diff);
+    $("#tab-tests").replaceChildren(el("pre", {}, run.test_output || "(no test output)"));
+    renderSteps($("#tab-steps"), run.steps);
+  }
+
+  document.querySelectorAll(".tabs button").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b === button)));
+      document.querySelectorAll(".panel").forEach((p) => { p.hidden = p.id !== "tab-" + button.dataset.tab; });
+    });
+  });
+
+  fetch("runs.json")
+    .then((response) => response.json())
+    .then((runs) => {
+      const picker = $("#picker");
+      runs.forEach((run, i) => picker.append(el("option", { value: String(i) }, label(run))));
+      picker.addEventListener("change", () => show(runs[Number(picker.value)]));
+      if (runs.length) show(runs[0]);
+      else $("#summary").textContent = "No runs yet. Add run records to space/runs/ and run space/build.py.";
+    })
+    .catch((err) => { $("#summary").textContent = "Could not load runs.json: " + err; });
+</script>
+</body>
+</html>

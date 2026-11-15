@@ -1,0 +1,371 @@
+[
+ {
+  "run_id": "fb9ef8a0",
+  "ticket_title": "Filter the task list by status",
+  "ticket_body": "The list page needs to show open and finished tasks in separate tabs.\n\n- `GET /tasks?done=true` returns only finished tasks\n- `GET /tasks?done=false` returns only open tasks\n- Without the parameter, all tasks come back like today\n- A value that is not a boolean, such as `done=maybe`, gives a 422",
+  "status": "pr_opened",
+  "attempts": 1,
+  "seconds": 56.1,
+  "tokens_in": 6109,
+  "tokens_out": 3570,
+  "cost_usd": 0.0958,
+  "model": "anthropic:claude-opus-5-5",
+  "spec": "## Goal\nAdd an optional `done` query parameter to `GET /tasks`. When it is set, the endpoint returns only tasks whose `done` value matches. When it is absent, the endpoint returns every task, as it does today. A value that is not a boolean returns 422. FastAPI's built-in query validation produces that 422.\n\n## Changes\n- **app/main.py**: Give `list_tasks` an optional boolean query parameter `done` with a default of `None`.\n  - When `done` is `None`, return `store.list_all()` unchanged.\n  - Otherwise, filter that list to tasks where `task.done == done`, keeping insertion order.\n  - No other endpoints change.\n\n## Tests\nUpdate `tests/test_tasks.py`. Each test creates three tasks and marks one of them done through `PATCH`.\n- **test_list_filter_done_true**: `?done=true` returns only the finished task. Proves AC1.\n- **test_list_filter_done_false**: `?done=false` returns only the two open tasks, in creation order. Proves AC2.\n- **test_list_no_filter_returns_all**: with no parameter, all three tasks come back. Proves AC3. The existing `test_list` stays as it is and also guards current behavior.\n- **test_list_filter_invalid_value**: `?done=maybe` returns 422. Proves AC4.\n\n## Out of scope\n- Moving the filtering logic into `store.py`.\n- Adding filters on other fields, or adding pagination.\n- Fixing the `\"Task not fonud\"` typo.\n- Fixing `update_task`'s `if body.done:` check, which means `PATCH` can never set `done` back to `false`.\n- Any UI or tab work on the list page.\n\n## Risks\n- **Lenient boolean parsing**: FastAPI/Pydantic also accept `1/0`, `yes/no`, `on/off` and similar values. Only clearly invalid values like `maybe` return 422. That meets the acceptance criteria, but it is looser than \"true/false only\". Making it stricter would need extra validation, which I am not adding.\n- **Unfiltered list**: filtering happens over the full in-memory list. That is fine at this scale but grows linearly with the number of tasks.\n- **Test setup**: because of the `update_task` bug, tests must not try to un-mark a task as done.",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -1,4 +1,4 @@\n-from typing import List\n+from typing import List, Optional\n \n from fastapi import FastAPI, HTTPException\n \n@@ -19,8 +19,11 @@\n \n \n @app.get(\"/tasks\", response_model=List[Task])\n-def list_tasks():\n-    return store.list_all()\n+def list_tasks(done: Optional[bool] = None):\n+    tasks = store.list_all()\n+    if done is None:\n+        return tasks\n+    return [task for task in tasks if task.done == done]\n \n \n @app.get(\"/tasks/{task_id}\", response_model=Task)\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -21,6 +21,45 @@\n     assert titles == [\"One\", \"Two\"]\n \n \n+def _make_three_tasks_one_done(client):\n+    client.post(\"/tasks\", json={\"title\": \"One\"})\n+    second = client.post(\"/tasks\", json={\"title\": \"Two\"}).json()\n+    client.post(\"/tasks\", json={\"title\": \"Three\"})\n+    resp = client.patch(f\"/tasks/{second['id']}\", json={\"done\": True})\n+    assert resp.json()[\"done\"] is True\n+\n+\n+def test_list_filter_done_true(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\", params={\"done\": \"true\"})\n+    assert resp.status_code == 200\n+    tasks = resp.json()\n+    assert [t[\"title\"] for t in tasks] == [\"Two\"]\n+    assert all(t[\"done\"] is True for t in tasks)\n+\n+\n+def test_list_filter_done_false(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\", params={\"done\": \"false\"})\n+    assert resp.status_code == 200\n+    tasks = resp.json()\n+    assert [t[\"title\"] for t in tasks] == [\"One\", \"Three\"]\n+    assert all(t[\"done\"] is False for t in tasks)\n+\n+\n+def test_list_no_filter_returns_all(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\")\n+    assert resp.status_code == 200\n+    assert [t[\"title\"] for t in resp.json()] == [\"One\", \"Two\", \"Three\"]\n+\n+\n+def test_list_filter_invalid_value(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\", params={\"done\": \"maybe\"})\n+    assert resp.status_code == 422\n+\n+\n def test_update_title(client):\n     task = client.post(\"/tasks\", json={\"title\": \"Old\"}).json()\n     updated = client.patch(f\"/tasks/{task['id']}\", json={\"title\": \"New\"})\n",
+  "test_output": "...........                                                              [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 0.08s",
+  "failure_reason": "",
+  "error": "",
+  "steps": [
+   {
+    "step": "parse_ticket",
+    "seconds": 2.55,
+    "tokens_in": 371,
+    "tokens_out": 226,
+    "summary": "Add a 'done' query parameter to GET /tasks so the list page can show open and finished tasks in separate tabs."
+   },
+   {
+    "step": "explore",
+    "seconds": 2.18,
+    "tokens_in": 441,
+    "tokens_out": 124,
+    "summary": "Reading 5 of 8 files"
+   },
+   {
+    "step": "write_spec",
+    "seconds": 9.88,
+    "tokens_in": 2275,
+    "tokens_out": 953,
+    "summary": "Spec written (311 words)"
+   },
+   {
+    "step": "approval",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Approved by reviewer"
+   },
+   {
+    "step": "implement",
+    "seconds": 15.66,
+    "tokens_in": 3022,
+    "tokens_out": 2267,
+    "summary": "Attempt 1: wrote 2 files, blocked 0"
+   },
+   {
+    "step": "run_tests",
+    "seconds": 2.7,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Tests passed"
+   },
+   {
+    "step": "open_pr",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/ticket-agent-9xasmqph/out/pull_request.md"
+   }
+  ],
+  "suspicious": []
+ },
+ {
+  "run_id": "eval-01_fix_not_found_typo",
+  "ticket_title": "Typo in the error message for a missing task",
+  "ticket_body": "When I ask for a task that does not exist, the API answers with `Task not fonud`.\nIt should say `Task not found`. Please fix it everywhere it shows up.",
+  "status": "pr_opened",
+  "attempts": 1,
+  "seconds": 28.1,
+  "tokens_in": 5942,
+  "tokens_out": 3124,
+  "cost_usd": 0.0862,
+  "model": "anthropic:claude-opus-5-5",
+  "spec": "## Goal\nFix the 404 error message for missing tasks from `Task not fonud` to `Task not found`, and remove the misspelling from the whole codebase.\n\n## Changes\n- **app/main.py**: Change the `detail` string in all three `HTTPException(status_code=404, ...)` calls, in `get_task`, `update_task`, and `delete_task`, from `\"Task not fonud\"` to `\"Task not found\"`.\n- **tests/test_tasks.py**: Add assertions on the error message for missing tasks (see Tests).\n- **Repo-wide check**: Search the whole repo for `fonud`, covering source, tests, docs, and README. Fix any other occurrences the same way. Among the files provided, only `app/main.py` contains it.\n\n## Tests\n- **Update `test_missing_task`**: Also assert that the response JSON `detail` equals `\"Task not found\"`. This proves GET on a missing task returns the corrected message.\n- **Add `test_update_missing_task`**: PATCH `/tasks/999` returns 404 with `detail == \"Task not found\"`. This proves the update path is fixed.\n- **Add `test_delete_missing_task`**: DELETE `/tasks/999` returns 404 with `detail == \"Task not found\"`. This proves the delete path is fixed.\n- **Existing tests**: None of them currently assert on the misspelled text, so none need changing. All existing tests should still pass.\n\n## Out of scope\n- Moving the message into a shared constant, or changing the error format.\n- Changing status codes or any other API behavior.\n- The unrelated bug in `update_task`. It uses `if body.done:`, so a task cannot be set back to `done: false`. This should be tracked in a separate ticket.\n- Any CI, deployment, or dependency changes.\n\n## Risks\n- **API clients that match on the exact old string** will see a different message. The risk is low because the status code is unchanged and the old text was clearly a bug. Mention it in the release notes.\n- **Occurrences outside the provided files**, such as docs or fixtures, could be missed. The repo-wide search for `fonud` reduces this risk and is required by the acceptance criteria.",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -27,7 +27,7 @@\n def get_task(task_id: int):\n     task = store.get(task_id)\n     if task is None:\n-        raise HTTPException(status_code=404, detail=\"Task not fonud\")\n+        raise HTTPException(status_code=404, detail=\"Task not found\")\n     return task\n \n \n@@ -35,7 +35,7 @@\n def update_task(task_id: int, body: TaskUpdate):\n     task = store.get(task_id)\n     if task is None:\n-        raise HTTPException(status_code=404, detail=\"Task not fonud\")\n+        raise HTTPException(status_code=404, detail=\"Task not found\")\n     if body.title is not None:\n         task.title = body.title\n     if body.description is not None:\n@@ -48,5 +48,5 @@\n @app.delete(\"/tasks/{task_id}\")\n def delete_task(task_id: int):\n     if not store.delete(task_id):\n-        raise HTTPException(status_code=404, detail=\"Task not fonud\")\n+        raise HTTPException(status_code=404, detail=\"Task not found\")\n     return {\"ok\": True}\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -41,4 +41,18 @@\n \n \n def test_missing_task(client):\n-    assert client.get(\"/tasks/999\").status_code == 404\n+    response = client.get(\"/tasks/999\")\n+    assert response.status_code == 404\n+    assert response.json()[\"detail\"] == \"Task not found\"\n+\n+\n+def test_update_missing_task(client):\n+    response = client.patch(\"/tasks/999\", json={\"title\": \"Nope\"})\n+    assert response.status_code == 404\n+    assert response.json()[\"detail\"] == \"Task not found\"\n+\n+\n+def test_delete_missing_task(client):\n+    response = client.delete(\"/tasks/999\")\n+    assert response.status_code == 404\n+    assert response.json()[\"detail\"] == \"Task not found\"\n",
+  "test_output": ".........                                                                [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n9 passed, 1 warning in 0.05s",
+  "failure_reason": "",
+  "error": "",
+  "steps": [
+   {
+    "step": "parse_ticket",
+    "seconds": 3.33,
+    "tokens_in": 319,
+    "tokens_out": 220,
+    "summary": "The API's error message for a nonexistent task reads 'Task not fonud' and should read 'Task not found' everywhere it appears."
+   },
+   {
+    "step": "explore",
+    "seconds": 2.79,
+    "tokens_in": 434,
+    "tokens_out": 203,
+    "summary": "Reading 6 of 8 files"
+   },
+   {
+    "step": "write_spec",
+    "seconds": 7.88,
+    "tokens_in": 2242,
+    "tokens_out": 840,
+    "summary": "Spec written (316 words)"
+   },
+   {
+    "step": "approval",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Auto approved (eval mode)"
+   },
+   {
+    "step": "implement",
+    "seconds": 13.38,
+    "tokens_in": 2947,
+    "tokens_out": 1861,
+    "summary": "Attempt 1: wrote 2 files, blocked 0"
+   },
+   {
+    "step": "run_tests",
+    "seconds": 0.72,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Tests passed"
+   },
+   {
+    "step": "open_pr",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/tmpgt0z_8a5/01_fix_not_found_typo/out/pull_request.md"
+   }
+  ],
+  "suspicious": [],
+  "eval": {
+   "case": "01_fix_not_found_typo",
+   "level": "easy",
+   "passed": true,
+   "hidden_passed": true
+  }
+ },
+ {
+  "run_id": "eval-08_pagination",
+  "ticket_title": "Add paging to the task list",
+  "ticket_body": "One customer has thousands of tasks and the list call is getting slow.\n\n`GET /tasks` should take two new query parameters:\n\n- `limit`: how many tasks to return. Default 50, lowest 1, highest 100\n- `offset`: how many tasks to skip. Default 0, cannot be negative\n\nValues outside those ranges give a 422.",
+  "status": "pr_opened",
+  "attempts": 1,
+  "seconds": 41.0,
+  "tokens_in": 6490,
+  "tokens_out": 4775,
+  "cost_usd": 0.1215,
+  "model": "anthropic:claude-opus-5-5",
+  "spec": "## Goal\nAdd optional `limit` and `offset` query parameters to `GET /tasks` so clients can page through large task lists. Out-of-range values return HTTP 422.\n\n## Changes\n- **`app/main.py`**: Add `limit` and `offset` to `list_tasks` as query parameters using FastAPI `Query`.\n  - `limit`: default 50, `ge=1`, `le=100`.\n  - `offset`: default 0, `ge=0`.\n  - FastAPI's built-in validation returns 422 for out-of-range values, so no custom error code is needed.\n  - Pass both values to the store.\n- **`app/store.py`**: Change `list_all` to accept `limit` and `offset` and return that slice of tasks in insertion (id) order. The existing order is kept.\n\n## Tests\nUpdate `tests/test_tasks.py`:\n- **`test_list_default_limit`**: Create 60 tasks. A plain `GET /tasks` returns exactly 50, starting at the first task. Proves the default limit and default offset of 0.\n- **`test_list_limit_bounds_accepted`**: `limit=1` returns 1 task and `limit=100` returns up to 100. Proves the inclusive range.\n- **`test_list_limit_out_of_range`**: `limit=0` and `limit=101` each return 422.\n- **`test_list_negative_offset`**: `offset=-1` returns 422.\n- **`test_list_offset_skips`**: With 5 tasks, `offset=2` returns tasks 3 to 5. Proves the skip behavior.\n- **`test_list_paging_full_list`**: With 7 tasks, `limit=3` at offsets 0, 3 and 6 returns every task once, in order. Proves the two parameters work together.\n- **Existing `test_list`**: Unchanged. It must still pass, which proves backward compatibility for small lists.\n\n## Out of scope\n- Total-count metadata, pagination headers, or links.\n- Cursor-based paging.\n- Sorting or filtering options.\n- Unrelated bugs noticed in `main.py`:\n  - The \"fonud\" typo in 404 messages.\n  - `update_task` ignores `done: false` because of the `if body.done:` check.\n- Persistent storage or indexing.\n\n## Risks\n- **Behavior change**: Clients that relied on `GET /tasks` returning every task will now get at most 50. This is intended by the ticket but should be noted in release notes.\n- **Ordering**: Pages depend on dict insertion order. Tasks deleted between page requests can shift the offsets, which is acceptable for offset paging.\n- **Performance**: Slicing the in-memory list still builds the full list first. This is fine for the current store, but a real backend would need to paginate at the query level.",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -1,6 +1,6 @@\n from typing import List\n \n-from fastapi import FastAPI, HTTPException\n+from fastapi import FastAPI, HTTPException, Query\n \n from . import store\n from .models import Task, TaskCreate, TaskUpdate\n@@ -19,8 +19,11 @@\n \n \n @app.get(\"/tasks\", response_model=List[Task])\n-def list_tasks():\n-    return store.list_all()\n+def list_tasks(\n+    limit: int = Query(50, ge=1, le=100),\n+    offset: int = Query(0, ge=0),\n+):\n+    return store.list_all(limit=limit, offset=offset)\n \n \n @app.get(\"/tasks/{task_id}\", response_model=Task)\n--- a/app/store.py\n+++ b/app/store.py\n@@ -32,8 +32,8 @@\n     return task\n \n \n-def list_all() -> List[Task]:\n-    return list(_tasks.values())\n+def list_all(limit: int = 50, offset: int = 0) -> List[Task]:\n+    return list(_tasks.values())[offset:offset + limit]\n \n \n def get(task_id: int) -> Optional[Task]:\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -21,6 +21,56 @@\n     assert titles == [\"One\", \"Two\"]\n \n \n+def _make_tasks(client, n):\n+    return [client.post(\"/tasks\", json={\"title\": f\"Task {i}\"}).json() for i in range(1, n + 1)]\n+\n+\n+def test_list_default_limit(client):\n+    created = _make_tasks(client, 60)\n+    resp = client.get(\"/tasks\")\n+    assert resp.status_code == 200\n+    data = resp.json()\n+    assert len(data) == 50\n+    assert [t[\"id\"] for t in data] == [t[\"id\"] for t in created[:50]]\n+\n+\n+def test_list_limit_bounds_accepted(client):\n+    _make_tasks(client, 101)\n+    resp = client.get(\"/tasks\", params={\"limit\": 1})\n+    assert resp.status_code == 200\n+    assert len(resp.json()) == 1\n+    resp = client.get(\"/tasks\", params={\"limit\": 100})\n+    assert resp.status_code == 200\n+    assert len(resp.json()) == 100\n+\n+\n+def test_list_limit_out_of_range(client):\n+    assert client.get(\"/tasks\", params={\"limit\": 0}).status_code == 422\n+    assert client.get(\"/tasks\", params={\"limit\": 101}).status_code == 422\n+\n+\n+def test_list_negative_offset(client):\n+    assert client.get(\"/tasks\", params={\"offset\": -1}).status_code == 422\n+\n+\n+def test_list_offset_skips(client):\n+    _make_tasks(client, 5)\n+    resp = client.get(\"/tasks\", params={\"offset\": 2})\n+    assert resp.status_code == 200\n+    titles = [t[\"title\"] for t in resp.json()]\n+    assert titles == [\"Task 3\", \"Task 4\", \"Task 5\"]\n+\n+\n+def test_list_paging_full_list(client):\n+    created = _make_tasks(client, 7)\n+    collected = []\n+    for offset in (0, 3, 6):\n+        resp = client.get(\"/tasks\", params={\"limit\": 3, \"offset\": offset})\n+        assert resp.status_code == 200\n+        collected.extend(t[\"id\"] for t in resp.json())\n+    assert collected == [t[\"id\"] for t in created]\n+\n+\n def test_update_title(client):\n     task = client.post(\"/tasks\", json={\"title\": \"Old\"}).json()\n     updated = client.patch(f\"/tasks/{task['id']}\", json={\"title\": \"New\"})\n",
+  "test_output": ".............                                                            [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n13 passed, 1 warning in 0.44s",
+  "failure_reason": "",
+  "error": "",
+  "steps": [
+   {
+    "step": "parse_ticket",
+    "seconds": 4.04,
+    "tokens_in": 373,
+    "tokens_out": 417,
+    "summary": "Add `limit` and `offset` query parameters to `GET /tasks` so large task lists can be paged."
+   },
+   {
+    "step": "explore",
+    "seconds": 1.9,
+    "tokens_in": 552,
+    "tokens_out": 52,
+    "summary": "Reading 5 of 8 files"
+   },
+   {
+    "step": "write_spec",
+    "seconds": 11.36,
+    "tokens_in": 2392,
+    "tokens_out": 1167,
+    "summary": "Spec written (347 words)"
+   },
+   {
+    "step": "approval",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Auto approved (eval mode)"
+   },
+   {
+    "step": "implement",
+    "seconds": 22.52,
+    "tokens_in": 3173,
+    "tokens_out": 3139,
+    "summary": "Attempt 1: wrote 3 files, blocked 0"
+   },
+   {
+    "step": "run_tests",
+    "seconds": 1.15,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Tests passed"
+   },
+   {
+    "step": "open_pr",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/tmpgt0z_8a5/08_pagination/out/pull_request.md"
+   }
+  ],
+  "suspicious": [],
+  "eval": {
+   "case": "08_pagination",
+   "level": "medium",
+   "passed": true,
+   "hidden_passed": true
+  }
+ },
+ {
+  "run_id": "eval-11_tags",
+  "ticket_title": "Tags for tasks",
+  "ticket_body": "- A task can be created with an optional `tags` list of strings. The default is an empty list\n- Tags are saved in lower case, with spaces around them removed\n- Empty tags and repeated tags are dropped. The order of first appearance is kept\n- `GET /tasks?tag=work` returns only the tasks that have that tag. Case does not matter in the query",
+  "status": "pr_opened",
+  "attempts": 1,
+  "seconds": 42.0,
+  "tokens_in": 6542,
+  "tokens_out": 5124,
+  "cost_usd": 0.1286,
+  "model": "anthropic:claude-opus-5-5",
+  "spec": "## Goal\nLet tasks carry an optional, normalized list of tags. Let `GET /tasks` filter by a single tag, ignoring case.\n\n## Changes\n- **app/models.py**\n  - Add `tags: List[str]` to `TaskCreate` with an empty-list default (use a default factory).\n  - Add the same field to `Task`.\n  - Leave `TaskUpdate` unchanged.\n- **app/store.py**\n  - Add a small helper that normalizes tags:\n    - trim and lower-case each tag\n    - drop tags that are empty after trimming\n    - drop repeats, keeping the order of first appearance\n  - `create` stores the normalized tags on the new `Task`.\n  - `list_all` gains an optional `tag` argument. When it is given, return only tasks whose tags contain the normalized query value. When it is absent, behaviour is unchanged.\n- **app/main.py**\n  - `list_tasks` accepts an optional `tag` query parameter and passes it to `store.list_all`.\n\n## Tests\nAdd the following to `tests/test_tasks.py`:\n- **`test_create_without_tags_defaults_empty`**: a task created without `tags` returns `tags == []`.\n- **`test_tags_normalized`**: input `[\"  Work \", \"\", \"   \", \"Home\", \"work \", \"HOME\"]` is stored as `[\"work\", \"home\"]`. This proves lower-casing, trimming, dropping empty tags, dropping repeats, and keeping first-appearance order.\n- **`test_filter_by_tag`**: three tasks with different tags; `?tag=work` returns only the tasks tagged `work`.\n- **`test_filter_by_tag_case_insensitive`**: `?tag=WORK` returns the same tasks as `?tag=work`.\n\nAll existing tests must still pass, which shows the unfiltered list is unchanged.\n\n## Out of scope\n- Editing tags through PATCH.\n- Filtering by several tags at once.\n- Tag length or count limits.\n- Existing bugs we noticed but are not fixing here:\n  - The \"fonud\" typo in 404 messages.\n  - `if body.done:` in PATCH prevents setting `done` back to false.\n\n## Risks\n- Normalizing in the store, not in a Pydantic validator, avoids depending on Pydantic v1 vs v2 APIs. The downside is that any future code that builds a `Task` directly would skip normalization.\n- An empty `?tag=` normalizes to `\"\"`. It will match no tasks rather than acting as \"no filter\". This is acceptable, but should be documented.\n- Non-string items in `tags` are rejected with a 422 by validation, which is the intended behaviour.",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -1,4 +1,4 @@\n-from typing import List\n+from typing import List, Optional\n \n from fastapi import FastAPI, HTTPException\n \n@@ -19,8 +19,8 @@\n \n \n @app.get(\"/tasks\", response_model=List[Task])\n-def list_tasks():\n-    return store.list_all()\n+def list_tasks(tag: Optional[str] = None):\n+    return store.list_all(tag=tag)\n \n \n @app.get(\"/tasks/{task_id}\", response_model=Task)\n--- a/app/models.py\n+++ b/app/models.py\n@@ -1,12 +1,13 @@\n from datetime import datetime\n-from typing import Optional\n+from typing import List, Optional\n \n-from pydantic import BaseModel\n+from pydantic import BaseModel, Field\n \n \n class TaskCreate(BaseModel):\n     title: str\n     description: str = \"\"\n+    tags: List[str] = Field(default_factory=list)\n \n \n class TaskUpdate(BaseModel):\n@@ -20,4 +21,5 @@\n     title: str\n     description: str = \"\"\n     done: bool = False\n+    tags: List[str] = Field(default_factory=list)\n     created_at: datetime\n--- a/app/store.py\n+++ b/app/store.py\n@@ -19,12 +19,26 @@\n     _next_id = 1\n \n \n+def _normalize_tags(tags: List[str]) -> List[str]:\n+    \"\"\"Trim and lower-case tags, drop empty ones and repeats (first appearance wins).\"\"\"\n+    result: List[str] = []\n+    seen = set()\n+    for tag in tags:\n+        value = tag.strip().lower()\n+        if not value or value in seen:\n+            continue\n+        seen.add(value)\n+        result.append(value)\n+    return result\n+\n+\n def create(data: TaskCreate) -> Task:\n     global _next_id\n     task = Task(\n         id=_next_id,\n         title=data.title,\n         description=data.description,\n+        tags=_normalize_tags(data.tags),\n         created_at=datetime.now(timezone.utc),\n     )\n     _tasks[task.id] = task\n@@ -32,8 +46,17 @@\n     return task\n \n \n-def list_all() -> List[Task]:\n-    return list(_tasks.values())\n+def list_all(tag: Optional[str] = None) -> List[Task]:\n+    \"\"\"Return all tasks, or only those carrying `tag` when it is given.\n+\n+    The query tag is trimmed and lower-cased before matching. Note that an\n+    empty tag (e.g. `?tag=`) normalizes to \"\" and therefore matches no tasks;\n+    it is not treated as \"no filter\".\n+    \"\"\"\n+    if tag is None:\n+        return list(_tasks.values())\n+    wanted = tag.strip().lower()\n+    return [t for t in _tasks.values() if wanted in t.tags]\n \n \n def get(task_id: int) -> Optional[Task]:\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -42,3 +42,46 @@\n \n def test_missing_task(client):\n     assert client.get(\"/tasks/999\").status_code == 404\n+\n+\n+def test_create_without_tags_defaults_empty(client):\n+    created = client.post(\"/tasks\", json={\"title\": \"No tags\"})\n+    assert created.status_code == 201\n+    assert created.json()[\"tags\"] == []\n+\n+\n+def test_tags_normalized(client):\n+    created = client.post(\n+        \"/tasks\",\n+        json={\n+            \"title\": \"Tagged\",\n+            \"tags\": [\"  Work \", \"\", \"   \", \"Home\", \"work \", \"HOME\"],\n+        },\n+    )\n+    assert created.status_code == 201\n+    assert created.json()[\"tags\"] == [\"work\", \"home\"]\n+\n+    fetched = client.get(f\"/tasks/{created.json()['id']}\")\n+    assert fetched.json()[\"tags\"] == [\"work\", \"home\"]\n+\n+\n+def _make_tagged_tasks(client):\n+    client.post(\"/tasks\", json={\"title\": \"A\", \"tags\": [\"work\"]})\n+    client.post(\"/tasks\", json={\"title\": \"B\", \"tags\": [\"home\"]})\n+    client.post(\"/tasks\", json={\"title\": \"C\", \"tags\": [\"Work\", \"urgent\"]})\n+\n+\n+def test_filter_by_tag(client):\n+    _make_tagged_tasks(client)\n+    response = client.get(\"/tasks\", params={\"tag\": \"work\"})\n+    assert response.status_code == 200\n+    titles = [t[\"title\"] for t in response.json()]\n+    assert titles == [\"A\", \"C\"]\n+\n+\n+def test_filter_by_tag_case_insensitive(client):\n+    _make_tagged_tasks(client)\n+    lower = client.get(\"/tasks\", params={\"tag\": \"work\"}).json()\n+    upper = client.get(\"/tasks\", params={\"tag\": \"WORK\"}).json()\n+    assert [t[\"id\"] for t in upper] == [t[\"id\"] for t in lower]\n+    assert [t[\"title\"] for t in upper] == [\"A\", \"C\"]\n",
+  "test_output": "...........                                                              [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 0.07s",
+  "failure_reason": "",
+  "error": "",
+  "steps": [
+   {
+    "step": "parse_ticket",
+    "seconds": 3.53,
+    "tokens_in": 374,
+    "tokens_out": 353,
+    "summary": "Add an optional, normalized tags list to tasks and support filtering tasks by tag through GET /tasks?tag=."
+   },
+   {
+    "step": "explore",
+    "seconds": 2.28,
+    "tokens_in": 565,
+    "tokens_out": 61,
+    "summary": "Reading 6 of 8 files"
+   },
+   {
+    "step": "write_spec",
+    "seconds": 11.4,
+    "tokens_in": 2431,
+    "tokens_out": 1158,
+    "summary": "Spec written (348 words)"
+   },
+   {
+    "step": "approval",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Auto approved (eval mode)"
+   },
+   {
+    "step": "implement",
+    "seconds": 24.08,
+    "tokens_in": 3172,
+    "tokens_out": 3552,
+    "summary": "Attempt 1: wrote 4 files, blocked 0"
+   },
+   {
+    "step": "run_tests",
+    "seconds": 0.71,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Tests passed"
+   },
+   {
+    "step": "open_pr",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/tmpgt0z_8a5/11_tags/out/pull_request.md"
+   }
+  ],
+  "suspicious": [],
+  "eval": {
+   "case": "11_tags",
+   "level": "hard",
+   "passed": true,
+   "hidden_passed": true
+  }
+ },
+ {
+  "run_id": "eval-16_bulk_delete_done",
+  "ticket_title": "Clear finished tasks in one call",
+  "ticket_body": "- `DELETE /tasks?done=true` deletes every finished task and returns 200 with `{\"deleted\": 2}`, using the real count\n- `DELETE /tasks` without `done=true` returns a 400 and deletes nothing\n- Deleting one task by id keeps working as before",
+  "status": "pr_opened",
+  "attempts": 1,
+  "seconds": 40.9,
+  "tokens_in": 6456,
+  "tokens_out": 5016,
+  "cost_usd": 0.1261,
+  "model": "anthropic:claude-opus-5-5",
+  "spec": "## Goal\nAdd `DELETE /tasks?done=true`. It removes every finished task and returns `{\"deleted\": N}`, where N is the real count. A request without `done=true` gets a 400 and deletes nothing. `DELETE /tasks/{task_id}` stays unchanged.\n\n## Changes\n- **app/store.py**: Add a `delete_done()` function. It removes every task with `done == True` from `_tasks` and returns how many it removed. The existing `delete()` stays as it is.\n- **app/main.py**: Add a `DELETE /tasks` route with an optional string query param `done`.\n  - If `done` is not exactly `\"true\"`, raise `HTTPException(400)` before touching the store. This covers a missing value, `false`, and junk values.\n  - Otherwise call `store.delete_done()` and return `{\"deleted\": count}` with status 200.\n  - The existing `delete_task` route is not modified.\n\n## Tests\nAll in `tests/test_tasks.py`:\n- `test_clear_done_deletes_only_finished`: Create 3 tasks and mark 2 done. The call returns 200 and `{\"deleted\": 2}`. `GET /tasks` then lists only the unfinished task.\n- `test_clear_done_none_finished`: Create 1 unfinished task. The call returns `{\"deleted\": 0}` and the task remains.\n- `test_clear_without_done_param_is_400`: Create a done task and an unfinished task. `DELETE /tasks` returns 400 and both tasks still exist.\n- `test_clear_with_done_false_is_400`: `?done=false` returns 400 and deletes nothing.\n- The existing `test_delete` stays unchanged and proves single-task deletion still works.\n- Add `test_delete_missing_returns_404`: Deleting an unknown id still returns 404, which shows the old behavior is preserved.\n\n## Out of scope\n- Fixing the \"fonud\" typo in the 404 messages.\n- The PATCH bug where `done: false` cannot un-mark a task.\n- Persistence, auth, and any CI or deployment changes.\n\n## Risks\n- **Strict matching:** Using a string param with an exact `\"true\"` match means `True`, `1` and `yes` are rejected with 400. That is a deliberate choice to keep the behavior strict and predictable.\n- **Typed bool alternative:** Declaring `done` as a bool instead would return 422 for invalid values, which conflicts with the 400 requirement.\n- **Route ordering:** `/tasks` and `/tasks/{task_id}` are different paths, so there is no routing clash.\n- **Destructive bulk delete:** Accidental calls are guarded only by the required query parameter.",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -1,4 +1,4 @@\n-from typing import List\n+from typing import List, Optional\n \n from fastapi import FastAPI, HTTPException\n \n@@ -21,6 +21,14 @@\n @app.get(\"/tasks\", response_model=List[Task])\n def list_tasks():\n     return store.list_all()\n+\n+\n+@app.delete(\"/tasks\")\n+def clear_done_tasks(done: Optional[str] = None):\n+    if done != \"true\":\n+        raise HTTPException(status_code=400, detail=\"Query parameter done=true is required\")\n+    count = store.delete_done()\n+    return {\"deleted\": count}\n \n \n @app.get(\"/tasks/{task_id}\", response_model=Task)\n--- a/app/store.py\n+++ b/app/store.py\n@@ -47,3 +47,10 @@\n \n def delete(task_id: int) -> bool:\n     return _tasks.pop(task_id, None) is not None\n+\n+\n+def delete_done() -> int:\n+    done_ids = [task_id for task_id, task in _tasks.items() if task.done]\n+    for task_id in done_ids:\n+        del _tasks[task_id]\n+    return len(done_ids)\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -42,3 +42,57 @@\n \n def test_missing_task(client):\n     assert client.get(\"/tasks/999\").status_code == 404\n+\n+\n+def _make_task(client, title, done=False):\n+    task = client.post(\"/tasks\", json={\"title\": title}).json()\n+    if done:\n+        client.patch(f\"/tasks/{task['id']}\", json={\"done\": True})\n+    return task\n+\n+\n+def test_clear_done_deletes_only_finished(client):\n+    _make_task(client, \"Done one\", done=True)\n+    open_task = _make_task(client, \"Still open\")\n+    _make_task(client, \"Done two\", done=True)\n+\n+    resp = client.delete(\"/tasks?done=true\")\n+    assert resp.status_code == 200\n+    assert resp.json() == {\"deleted\": 2}\n+\n+    remaining = client.get(\"/tasks\").json()\n+    assert [t[\"id\"] for t in remaining] == [open_task[\"id\"]]\n+\n+\n+def test_clear_done_none_finished(client):\n+    task = _make_task(client, \"Open\")\n+\n+    resp = client.delete(\"/tasks?done=true\")\n+    assert resp.status_code == 200\n+    assert resp.json() == {\"deleted\": 0}\n+    assert client.get(f\"/tasks/{task['id']}\").status_code == 200\n+\n+\n+def test_clear_without_done_param_is_400(client):\n+    done_task = _make_task(client, \"Done\", done=True)\n+    open_task = _make_task(client, \"Open\")\n+\n+    resp = client.delete(\"/tasks\")\n+    assert resp.status_code == 400\n+    assert client.get(f\"/tasks/{done_task['id']}\").status_code == 200\n+    assert client.get(f\"/tasks/{open_task['id']}\").status_code == 200\n+\n+\n+def test_clear_with_done_false_is_400(client):\n+    done_task = _make_task(client, \"Done\", done=True)\n+    open_task = _make_task(client, \"Open\")\n+\n+    resp = client.delete(\"/tasks?done=false\")\n+    assert resp.status_code == 400\n+    assert len(client.get(\"/tasks\").json()) == 2\n+    assert client.get(f\"/tasks/{done_task['id']}\").status_code == 200\n+    assert client.get(f\"/tasks/{open_task['id']}\").status_code == 200\n+\n+\n+def test_delete_missing_returns_404(client):\n+    assert client.delete(\"/tasks/999\").status_code == 404\n",
+  "test_output": "............                                                             [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n12 passed, 1 warning in 0.10s",
+  "failure_reason": "",
+  "error": "",
+  "steps": [
+   {
+    "step": "parse_ticket",
+    "seconds": 3.27,
+    "tokens_in": 358,
+    "tokens_out": 333,
+    "summary": "Add a bulk-delete endpoint, DELETE /tasks?done=true, that removes all finished tasks in one call and returns how many were deleted."
+   },
+   {
+    "step": "explore",
+    "seconds": 2.01,
+    "tokens_in": 546,
+    "tokens_out": 134,
+    "summary": "Reading 6 of 8 files"
+   },
+   {
+    "step": "write_spec",
+    "seconds": 12.17,
+    "tokens_in": 2386,
+    "tokens_out": 1297,
+    "summary": "Spec written (339 words)"
+   },
+   {
+    "step": "approval",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Auto approved (eval mode)"
+   },
+   {
+    "step": "implement",
+    "seconds": 22.67,
+    "tokens_in": 3166,
+    "tokens_out": 3252,
+    "summary": "Attempt 1: wrote 3 files, blocked 0"
+   },
+   {
+    "step": "run_tests",
+    "seconds": 0.78,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "Tests passed"
+   },
+   {
+    "step": "open_pr",
+    "seconds": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/tmpgt0z_8a5/16_bulk_delete_done/out/pull_request.md"
+   }
+  ],
+  "suspicious": [],
+  "eval": {
+   "case": "16_bulk_delete_done",
+   "level": "hard",
+   "passed": true,
+   "hidden_passed": true
+  }
+ }
+]
