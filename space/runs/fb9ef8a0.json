@@ -1,0 +1,84 @@
+{
+  "run_id": "fb9ef8a0",
+  "ticket_title": "Filter the task list by status",
+  "ticket_body": "The list page needs to show open and finished tasks in separate tabs.\n\n- `GET /tasks?done=true` returns only finished tasks\n- `GET /tasks?done=false` returns only open tasks\n- Without the parameter, all tasks come back like today\n- A value that is not a boolean, such as `done=maybe`, gives a 422",
+  "status": "pr_opened",
+  "error": "",
+  "failure_reason": "",
+  "ticket": {
+    "summary": "Add a 'done' query parameter to GET /tasks so the list page can show open and finished tasks in separate tabs.",
+    "kind": "feature",
+    "acceptance_criteria": [
+      "GET /tasks?done=true returns only finished tasks",
+      "GET /tasks?done=false returns only open tasks",
+      "GET /tasks without the done parameter returns all tasks, unchanged from current behavior",
+      "GET /tasks with a non-boolean done value (e.g. done=maybe) returns HTTP 422"
+    ],
+    "suspicious": []
+  },
+  "spec": "## Goal\nAdd an optional `done` query parameter to `GET /tasks`. When it is set, the endpoint returns only tasks whose `done` value matches. When it is absent, the endpoint returns every task, as it does today. A value that is not a boolean returns 422. FastAPI's built-in query validation produces that 422.\n\n## Changes\n- **app/main.py**: Give `list_tasks` an optional boolean query parameter `done` with a default of `None`.\n  - When `done` is `None`, return `store.list_all()` unchanged.\n  - Otherwise, filter that list to tasks where `task.done == done`, keeping insertion order.\n  - No other endpoints change.\n\n## Tests\nUpdate `tests/test_tasks.py`. Each test creates three tasks and marks one of them done through `PATCH`.\n- **test_list_filter_done_true**: `?done=true` returns only the finished task. Proves AC1.\n- **test_list_filter_done_false**: `?done=false` returns only the two open tasks, in creation order. Proves AC2.\n- **test_list_no_filter_returns_all**: with no parameter, all three tasks come back. Proves AC3. The existing `test_list` stays as it is and also guards current behavior.\n- **test_list_filter_invalid_value**: `?done=maybe` returns 422. Proves AC4.\n\n## Out of scope\n- Moving the filtering logic into `store.py`.\n- Adding filters on other fields, or adding pagination.\n- Fixing the `\"Task not fonud\"` typo.\n- Fixing `update_task`'s `if body.done:` check, which means `PATCH` can never set `done` back to `false`.\n- Any UI or tab work on the list page.\n\n## Risks\n- **Lenient boolean parsing**: FastAPI/Pydantic also accept `1/0`, `yes/no`, `on/off` and similar values. Only clearly invalid values like `maybe` return 422. That meets the acceptance criteria, but it is looser than \"true/false only\". Making it stricter would need extra validation, which I am not adding.\n- **Unfiltered list**: filtering happens over the full in-memory list. That is fine at this scale but grows linearly with the number of tasks.\n- **Test setup**: because of the `update_task` bug, tests must not try to un-mark a task as done.",
+  "attempts": 1,
+  "tests_passed": true,
+  "test_output": "...........                                                              [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 0.08s",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -1,4 +1,4 @@\n-from typing import List\n+from typing import List, Optional\n \n from fastapi import FastAPI, HTTPException\n \n@@ -19,8 +19,11 @@\n \n \n @app.get(\"/tasks\", response_model=List[Task])\n-def list_tasks():\n-    return store.list_all()\n+def list_tasks(done: Optional[bool] = None):\n+    tasks = store.list_all()\n+    if done is None:\n+        return tasks\n+    return [task for task in tasks if task.done == done]\n \n \n @app.get(\"/tasks/{task_id}\", response_model=Task)\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -21,6 +21,45 @@\n     assert titles == [\"One\", \"Two\"]\n \n \n+def _make_three_tasks_one_done(client):\n+    client.post(\"/tasks\", json={\"title\": \"One\"})\n+    second = client.post(\"/tasks\", json={\"title\": \"Two\"}).json()\n+    client.post(\"/tasks\", json={\"title\": \"Three\"})\n+    resp = client.patch(f\"/tasks/{second['id']}\", json={\"done\": True})\n+    assert resp.json()[\"done\"] is True\n+\n+\n+def test_list_filter_done_true(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\", params={\"done\": \"true\"})\n+    assert resp.status_code == 200\n+    tasks = resp.json()\n+    assert [t[\"title\"] for t in tasks] == [\"Two\"]\n+    assert all(t[\"done\"] is True for t in tasks)\n+\n+\n+def test_list_filter_done_false(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\", params={\"done\": \"false\"})\n+    assert resp.status_code == 200\n+    tasks = resp.json()\n+    assert [t[\"title\"] for t in tasks] == [\"One\", \"Three\"]\n+    assert all(t[\"done\"] is False for t in tasks)\n+\n+\n+def test_list_no_filter_returns_all(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\")\n+    assert resp.status_code == 200\n+    assert [t[\"title\"] for t in resp.json()] == [\"One\", \"Two\", \"Three\"]\n+\n+\n+def test_list_filter_invalid_value(client):\n+    _make_three_tasks_one_done(client)\n+    resp = client.get(\"/tasks\", params={\"done\": \"maybe\"})\n+    assert resp.status_code == 422\n+\n+\n def test_update_title(client):\n     task = client.post(\"/tasks\", json={\"title\": \"Old\"}).json()\n     updated = client.patch(f\"/tasks/{task['id']}\", json={\"title\": \"New\"})\n",
+  "pr_title": "Add a 'done' query parameter to GET /tasks so the list page can show ope",
+  "pr_body": "## What this does\nAdded an optional `done: Optional[bool] = None` query parameter to `list_tasks` that filters `store.list_all()` by `task.done` while keeping insertion order. FastAPI's query validation handles the 422 for invalid values. Added four tests for done=true, done=false, no parameter and an invalid value; each creates three tasks and marks one done via PATCH, and the existing `test_list` is unchanged.\n\n## Acceptance criteria\n- GET /tasks?done=true returns only finished tasks\n- GET /tasks?done=false returns only open tasks\n- GET /tasks without the done parameter returns all tasks, unchanged from current behavior\n- GET /tasks with a non-boolean done value (e.g. done=maybe) returns HTTP 422\n\n## Spec (approved by a human before any code was written)\n## Goal\nAdd an optional `done` query parameter to `GET /tasks`. When it is set, the endpoint returns only tasks whose `done` value matches. When it is absent, the endpoint returns every task, as it does today. A value that is not a boolean returns 422. FastAPI's built-in query validation produces that 422.\n\n## Changes\n- **app/main.py**: Give `list_tasks` an optional boolean query parameter `done` with a default of `None`.\n  - When `done` is `None`, return `store.list_all()` unchanged.\n  - Otherwise, filter that list to tasks where `task.done == done`, keeping insertion order.\n  - No other endpoints change.\n\n## Tests\nUpdate `tests/test_tasks.py`. Each test creates three tasks and marks one of them done through `PATCH`.\n- **test_list_filter_done_true**: `?done=true` returns only the finished task. Proves AC1.\n- **test_list_filter_done_false**: `?done=false` returns only the two open tasks, in creation order. Proves AC2.\n- **test_list_no_filter_returns_all**: with no parameter, all three tasks come back. Proves AC3. The existing `test_list` stays as it is and also guards current behavior.\n- **test_list_filter_invalid_value**: `?done=maybe` returns 422. Proves AC4.\n\n## Out of scope\n- Moving the filtering logic into `store.py`.\n- Adding filters on other fields, or adding pagination.\n- Fixing the `\"Task not fonud\"` typo.\n- Fixing `update_task`'s `if body.done:` check, which means `PATCH` can never set `done` back to `false`.\n- Any UI or tab work on the list page.\n\n## Risks\n- **Lenient boolean parsing**: FastAPI/Pydantic also accept `1/0`, `yes/no`, `on/off` and similar values. Only clearly invalid values like `maybe` return 422. That meets the acceptance criteria, but it is looser than \"true/false only\". Making it stricter would need extra validation, which I am not adding.\n- **Unfiltered list**: filtering happens over the full in-memory list. That is fine at this scale but grows linearly with the number of tasks.\n- **Test setup**: because of the `update_task` bug, tests must not try to un-mark a task as done.\n\n## Test results\nPassed on attempt 1 of 3.\n\n```\n...........                                                              [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 0.08s\n```\n\n_Opened by ticket-to-pr-agent. Please review like any other pull request._",
+  "pr_url": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/ticket-agent-9xasmqph/out/pull_request.md",
+  "steps": [
+    {
+      "step": "parse_ticket",
+      "seconds": 2.55,
+      "tokens_in": 371,
+      "tokens_out": 226,
+      "summary": "Add a 'done' query parameter to GET /tasks so the list page can show open and finished tasks in separate tabs."
+    },
+    {
+      "step": "explore",
+      "seconds": 2.18,
+      "tokens_in": 441,
+      "tokens_out": 124,
+      "summary": "Reading 5 of 8 files"
+    },
+    {
+      "step": "write_spec",
+      "seconds": 9.88,
+      "tokens_in": 2275,
+      "tokens_out": 953,
+      "summary": "Spec written (311 words)"
+    },
+    {
+      "step": "approval",
+      "seconds": 0.0,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "summary": "Approved by reviewer"
+    },
+    {
+      "step": "implement",
+      "seconds": 15.66,
+      "tokens_in": 3022,
+      "tokens_out": 2267,
+      "summary": "Attempt 1: wrote 2 files, blocked 0"
+    },
+    {
+      "step": "run_tests",
+      "seconds": 2.7,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "summary": "Tests passed"
+    },
+    {
+      "step": "open_pr",
+      "seconds": 0.0,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/ticket-agent-9xasmqph/out/pull_request.md"
+    }
+  ],
+  "seconds": 56.1,
+  "llm_calls": 4,
+  "tokens_in": 6109,
+  "tokens_out": 3570,
+  "cost_usd": 0.0958,
+  "model": "anthropic:claude-opus-5-5"
+}

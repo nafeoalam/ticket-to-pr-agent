@@ -9,4 +9,5 @@ pinned: false
 ---
 
 Replays of recorded runs of the ticket to pull request agent.
-This page does not run the agent. See the main repo for the code and the numbers.
+This page does not run the agent. The code, the eval set and the numbers are at
+https://github.com/nafeoalam/ticket-to-pr-agent

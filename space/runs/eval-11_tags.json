@@ -1,0 +1,97 @@
+{
+  "run_id": "eval-11_tags",
+  "ticket_title": "Tags for tasks",
+  "ticket_body": "- A task can be created with an optional `tags` list of strings. The default is an empty list\n- Tags are saved in lower case, with spaces around them removed\n- Empty tags and repeated tags are dropped. The order of first appearance is kept\n- `GET /tasks?tag=work` returns only the tasks that have that tag. Case does not matter in the query",
+  "status": "pr_opened",
+  "error": "",
+  "failure_reason": "",
+  "ticket": {
+    "summary": "Add an optional, normalized tags list to tasks and support filtering tasks by tag through GET /tasks?tag=.",
+    "kind": "feature",
+    "acceptance_criteria": [
+      "A task can be created with an optional `tags` field holding a list of strings",
+      "A task created without `tags` has an empty tags list",
+      "Each tag is stored in lower case with surrounding whitespace trimmed (e.g. '  Work ' becomes 'work')",
+      "Tags that are empty after trimming are dropped",
+      "Repeated tags are dropped after normalization (e.g. ['Work', 'work '] becomes ['work'])",
+      "Stored tags keep the order in which each tag first appeared",
+      "GET /tasks?tag=work returns only tasks whose tags include 'work'",
+      "The tag query is case-insensitive (e.g. ?tag=WORK returns the same results as ?tag=work)"
+    ],
+    "suspicious": []
+  },
+  "spec": "## Goal\nLet tasks carry an optional, normalized list of tags. Let `GET /tasks` filter by a single tag, ignoring case.\n\n## Changes\n- **app/models.py**\n  - Add `tags: List[str]` to `TaskCreate` with an empty-list default (use a default factory).\n  - Add the same field to `Task`.\n  - Leave `TaskUpdate` unchanged.\n- **app/store.py**\n  - Add a small helper that normalizes tags:\n    - trim and lower-case each tag\n    - drop tags that are empty after trimming\n    - drop repeats, keeping the order of first appearance\n  - `create` stores the normalized tags on the new `Task`.\n  - `list_all` gains an optional `tag` argument. When it is given, return only tasks whose tags contain the normalized query value. When it is absent, behaviour is unchanged.\n- **app/main.py**\n  - `list_tasks` accepts an optional `tag` query parameter and passes it to `store.list_all`.\n\n## Tests\nAdd the following to `tests/test_tasks.py`:\n- **`test_create_without_tags_defaults_empty`**: a task created without `tags` returns `tags == []`.\n- **`test_tags_normalized`**: input `[\"  Work \", \"\", \"   \", \"Home\", \"work \", \"HOME\"]` is stored as `[\"work\", \"home\"]`. This proves lower-casing, trimming, dropping empty tags, dropping repeats, and keeping first-appearance order.\n- **`test_filter_by_tag`**: three tasks with different tags; `?tag=work` returns only the tasks tagged `work`.\n- **`test_filter_by_tag_case_insensitive`**: `?tag=WORK` returns the same tasks as `?tag=work`.\n\nAll existing tests must still pass, which shows the unfiltered list is unchanged.\n\n## Out of scope\n- Editing tags through PATCH.\n- Filtering by several tags at once.\n- Tag length or count limits.\n- Existing bugs we noticed but are not fixing here:\n  - The \"fonud\" typo in 404 messages.\n  - `if body.done:` in PATCH prevents setting `done` back to false.\n\n## Risks\n- Normalizing in the store, not in a Pydantic validator, avoids depending on Pydantic v1 vs v2 APIs. The downside is that any future code that builds a `Task` directly would skip normalization.\n- An empty `?tag=` normalizes to `\"\"`. It will match no tasks rather than acting as \"no filter\". This is acceptable, but should be documented.\n- Non-string items in `tags` are rejected with a 422 by validation, which is the intended behaviour.",
+  "attempts": 1,
+  "tests_passed": true,
+  "test_output": "...........                                                              [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 0.07s",
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -1,4 +1,4 @@\n-from typing import List\n+from typing import List, Optional\n \n from fastapi import FastAPI, HTTPException\n \n@@ -19,8 +19,8 @@\n \n \n @app.get(\"/tasks\", response_model=List[Task])\n-def list_tasks():\n-    return store.list_all()\n+def list_tasks(tag: Optional[str] = None):\n+    return store.list_all(tag=tag)\n \n \n @app.get(\"/tasks/{task_id}\", response_model=Task)\n--- a/app/models.py\n+++ b/app/models.py\n@@ -1,12 +1,13 @@\n from datetime import datetime\n-from typing import Optional\n+from typing import List, Optional\n \n-from pydantic import BaseModel\n+from pydantic import BaseModel, Field\n \n \n class TaskCreate(BaseModel):\n     title: str\n     description: str = \"\"\n+    tags: List[str] = Field(default_factory=list)\n \n \n class TaskUpdate(BaseModel):\n@@ -20,4 +21,5 @@\n     title: str\n     description: str = \"\"\n     done: bool = False\n+    tags: List[str] = Field(default_factory=list)\n     created_at: datetime\n--- a/app/store.py\n+++ b/app/store.py\n@@ -19,12 +19,26 @@\n     _next_id = 1\n \n \n+def _normalize_tags(tags: List[str]) -> List[str]:\n+    \"\"\"Trim and lower-case tags, drop empty ones and repeats (first appearance wins).\"\"\"\n+    result: List[str] = []\n+    seen = set()\n+    for tag in tags:\n+        value = tag.strip().lower()\n+        if not value or value in seen:\n+            continue\n+        seen.add(value)\n+        result.append(value)\n+    return result\n+\n+\n def create(data: TaskCreate) -> Task:\n     global _next_id\n     task = Task(\n         id=_next_id,\n         title=data.title,\n         description=data.description,\n+        tags=_normalize_tags(data.tags),\n         created_at=datetime.now(timezone.utc),\n     )\n     _tasks[task.id] = task\n@@ -32,8 +46,17 @@\n     return task\n \n \n-def list_all() -> List[Task]:\n-    return list(_tasks.values())\n+def list_all(tag: Optional[str] = None) -> List[Task]:\n+    \"\"\"Return all tasks, or only those carrying `tag` when it is given.\n+\n+    The query tag is trimmed and lower-cased before matching. Note that an\n+    empty tag (e.g. `?tag=`) normalizes to \"\" and therefore matches no tasks;\n+    it is not treated as \"no filter\".\n+    \"\"\"\n+    if tag is None:\n+        return list(_tasks.values())\n+    wanted = tag.strip().lower()\n+    return [t for t in _tasks.values() if wanted in t.tags]\n \n \n def get(task_id: int) -> Optional[Task]:\n--- a/tests/test_tasks.py\n+++ b/tests/test_tasks.py\n@@ -42,3 +42,46 @@\n \n def test_missing_task(client):\n     assert client.get(\"/tasks/999\").status_code == 404\n+\n+\n+def test_create_without_tags_defaults_empty(client):\n+    created = client.post(\"/tasks\", json={\"title\": \"No tags\"})\n+    assert created.status_code == 201\n+    assert created.json()[\"tags\"] == []\n+\n+\n+def test_tags_normalized(client):\n+    created = client.post(\n+        \"/tasks\",\n+        json={\n+            \"title\": \"Tagged\",\n+            \"tags\": [\"  Work \", \"\", \"   \", \"Home\", \"work \", \"HOME\"],\n+        },\n+    )\n+    assert created.status_code == 201\n+    assert created.json()[\"tags\"] == [\"work\", \"home\"]\n+\n+    fetched = client.get(f\"/tasks/{created.json()['id']}\")\n+    assert fetched.json()[\"tags\"] == [\"work\", \"home\"]\n+\n+\n+def _make_tagged_tasks(client):\n+    client.post(\"/tasks\", json={\"title\": \"A\", \"tags\": [\"work\"]})\n+    client.post(\"/tasks\", json={\"title\": \"B\", \"tags\": [\"home\"]})\n+    client.post(\"/tasks\", json={\"title\": \"C\", \"tags\": [\"Work\", \"urgent\"]})\n+\n+\n+def test_filter_by_tag(client):\n+    _make_tagged_tasks(client)\n+    response = client.get(\"/tasks\", params={\"tag\": \"work\"})\n+    assert response.status_code == 200\n+    titles = [t[\"title\"] for t in response.json()]\n+    assert titles == [\"A\", \"C\"]\n+\n+\n+def test_filter_by_tag_case_insensitive(client):\n+    _make_tagged_tasks(client)\n+    lower = client.get(\"/tasks\", params={\"tag\": \"work\"}).json()\n+    upper = client.get(\"/tasks\", params={\"tag\": \"WORK\"}).json()\n+    assert [t[\"id\"] for t in upper] == [t[\"id\"] for t in lower]\n+    assert [t[\"title\"] for t in upper] == [\"A\", \"C\"]\n",
+  "pr_title": "Add an optional, normalized tags list to tasks and support filtering tas",
+  "pr_body": "## What this does\nAdded a normalized `tags` field to TaskCreate and Task. Normalization happens in the store. `GET /tasks` now takes an optional case-insensitive `tag` filter, and the empty-tag behaviour is documented in the `list_all` docstring. Added the four tests from the spec and left all existing tests unchanged.\n\n## Acceptance criteria\n- A task can be created with an optional `tags` field holding a list of strings\n- A task created without `tags` has an empty tags list\n- Each tag is stored in lower case with surrounding whitespace trimmed (e.g. '  Work ' becomes 'work')\n- Tags that are empty after trimming are dropped\n- Repeated tags are dropped after normalization (e.g. ['Work', 'work '] becomes ['work'])\n- Stored tags keep the order in which each tag first appeared\n- GET /tasks?tag=work returns only tasks whose tags include 'work'\n- The tag query is case-insensitive (e.g. ?tag=WORK returns the same results as ?tag=work)\n\n## Spec (approved by a human before any code was written)\n## Goal\nLet tasks carry an optional, normalized list of tags. Let `GET /tasks` filter by a single tag, ignoring case.\n\n## Changes\n- **app/models.py**\n  - Add `tags: List[str]` to `TaskCreate` with an empty-list default (use a default factory).\n  - Add the same field to `Task`.\n  - Leave `TaskUpdate` unchanged.\n- **app/store.py**\n  - Add a small helper that normalizes tags:\n    - trim and lower-case each tag\n    - drop tags that are empty after trimming\n    - drop repeats, keeping the order of first appearance\n  - `create` stores the normalized tags on the new `Task`.\n  - `list_all` gains an optional `tag` argument. When it is given, return only tasks whose tags contain the normalized query value. When it is absent, behaviour is unchanged.\n- **app/main.py**\n  - `list_tasks` accepts an optional `tag` query parameter and passes it to `store.list_all`.\n\n## Tests\nAdd the following to `tests/test_tasks.py`:\n- **`test_create_without_tags_defaults_empty`**: a task created without `tags` returns `tags == []`.\n- **`test_tags_normalized`**: input `[\"  Work \", \"\", \"   \", \"Home\", \"work \", \"HOME\"]` is stored as `[\"work\", \"home\"]`. This proves lower-casing, trimming, dropping empty tags, dropping repeats, and keeping first-appearance order.\n- **`test_filter_by_tag`**: three tasks with different tags; `?tag=work` returns only the tasks tagged `work`.\n- **`test_filter_by_tag_case_insensitive`**: `?tag=WORK` returns the same tasks as `?tag=work`.\n\nAll existing tests must still pass, which shows the unfiltered list is unchanged.\n\n## Out of scope\n- Editing tags through PATCH.\n- Filtering by several tags at once.\n- Tag length or count limits.\n- Existing bugs we noticed but are not fixing here:\n  - The \"fonud\" typo in 404 messages.\n  - `if body.done:` in PATCH prevents setting `done` back to false.\n\n## Risks\n- Normalizing in the store, not in a Pydantic validator, avoids depending on Pydantic v1 vs v2 APIs. The downside is that any future code that builds a `Task` directly would skip normalization.\n- An empty `?tag=` normalizes to `\"\"`. It will match no tasks rather than acting as \"no filter\". This is acceptable, but should be documented.\n- Non-string items in `tags` are rejected with a 422 by validation, which is the intended behaviour.\n\n## Test results\nPassed on attempt 1 of 3.\n\n```\n...........                                                              [100%]\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1\n  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 0.07s\n```\n\n_Opened by ticket-to-pr-agent. Please review like any other pull request._",
+  "pr_url": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/tmpgt0z_8a5/11_tags/out/pull_request.md",
+  "steps": [
+    {
+      "step": "parse_ticket",
+      "seconds": 3.53,
+      "tokens_in": 374,
+      "tokens_out": 353,
+      "summary": "Add an optional, normalized tags list to tasks and support filtering tasks by tag through GET /tasks?tag=."
+    },
+    {
+      "step": "explore",
+      "seconds": 2.28,
+      "tokens_in": 565,
+      "tokens_out": 61,
+      "summary": "Reading 6 of 8 files"
+    },
+    {
+      "step": "write_spec",
+      "seconds": 11.4,
+      "tokens_in": 2431,
+      "tokens_out": 1158,
+      "summary": "Spec written (348 words)"
+    },
+    {
+      "step": "approval",
+      "seconds": 0.0,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "summary": "Auto approved (eval mode)"
+    },
+    {
+      "step": "implement",
+      "seconds": 24.08,
+      "tokens_in": 3172,
+      "tokens_out": 3552,
+      "summary": "Attempt 1: wrote 4 files, blocked 0"
+    },
+    {
+      "step": "run_tests",
+      "seconds": 0.71,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "summary": "Tests passed"
+    },
+    {
+      "step": "open_pr",
+      "seconds": 0.0,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "summary": "local:///var/folders/d1/rb8cwk1d00529qrhbl_6w6w00000gn/T/tmpgt0z_8a5/11_tags/out/pull_request.md"
+    }
+  ],
+  "seconds": 42.0,
+  "llm_calls": 4,
+  "tokens_in": 6542,
+  "tokens_out": 5124,
+  "cost_usd": 0.1286,
+  "model": "anthropic:claude-opus-5-5",
+  "eval": {
+    "case": "11_tags",
+    "level": "hard",
+    "hidden_passed": true,
+    "own_tests_passed": true,
+    "passed": true,
+    "hidden_output": "",
+    "flagged_suspicious_text": false
+  }
+}
